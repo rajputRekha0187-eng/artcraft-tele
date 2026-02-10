@@ -159,13 +159,27 @@ def next_filename(n):
 
 def load_state():
     buf = io.BytesIO()
-    MediaIoBaseDownload(buf, drive.files().get_media(fileId=STATE_FILE_ID)).next_chunk()
-    return json.loads(buf.getvalue()).get("last_uploaded", 0)
+    MediaIoBaseDownload(
+        buf, drive.files().get_media(fileId=STATE_FILE_ID)
+    ).next_chunk()
+
+    try:
+        return json.loads(buf.getvalue()).get("last_uploaded", 0)
+    except:
+        return 0
+
 
 def save_state(n):
     data = json.dumps({"last_uploaded": n}).encode()
-    media = MediaIoBaseUpload(io.BytesIO(data), mimetype="application/json")
-    drive.files().update(fileId=STATE_FILE_ID, media_body=media).execute()
+    media = MediaIoBaseUpload(
+        io.BytesIO(data),
+        mimetype="application/json"
+    )
+    drive.files().update(
+        fileId=STATE_FILE_ID,
+        media_body=media
+    ).execute()
+
 
 def find_video(name):
     res = drive.files().list(
@@ -279,6 +293,10 @@ def random_title():
 # =========================================================
 # CORE SCHEDULER
 # =========================================================
+
+PAUSED = False
+last_uploaded = load_state()
+audios = list_audios()
 
 def run_scheduler():
     clean_tmp()
@@ -409,9 +427,10 @@ while True:
             tg(
                 f"📊 <b>Status</b>\n\n"
                 f"{bar}\n"
-                f"{last_processed} / {TOTAL_VIDEOS}\n"
+                f"{last_uploaded} / {TOTAL_VIDEOS}\n"
                 f"Paused: {PAUSED}"
             )
+
 
 
         elif text == "/reset_tmp":
