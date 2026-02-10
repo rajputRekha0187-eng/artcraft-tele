@@ -405,7 +405,7 @@ while True:
             )
 
         elif text == "/status":
-            bar = progress_bar(last_processed, TOTAL_VIDEOS)
+            bar = progress_bar(last_uploaded, TOTAL_VIDEOS)
             tg(
                 f"📊 <b>Status</b>\n\n"
                 f"{bar}\n"
