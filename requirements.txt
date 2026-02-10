@@ -1,0 +1,9 @@
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+python-dotenv
+python-dateutil
+requests
+setuptools
+wheel
