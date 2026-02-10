@@ -405,12 +405,12 @@ while True:
             )
 
         elif text == "/status":
-            current = load_state()   # 👈 ALWAYS read from Drive
-            bar = progress_bar(current, TOTAL_VIDEOS)
+            bar = progress_bar(last_processed, TOTAL_VIDEOS)
             tg(
                 f"📊 <b>Status</b>\n\n"
                 f"{bar}\n"
-                f"{current} / {TOTAL_VIDEOS}"
+                f"{last_processed} / {TOTAL_VIDEOS}\n"
+                f"Paused: {PAUSED}"
             )
 
 
