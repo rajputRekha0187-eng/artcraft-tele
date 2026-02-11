@@ -1,4 +1,4 @@
-import os, io, json, time, random, subprocess, requests
+import os, io, json, time, random, subprocess, requests, threading
 from datetime import datetime, timedelta
 from dateutil import tz
 from dotenv import load_dotenv
@@ -29,11 +29,15 @@ TOTAL_VIDEOS    = int(os.environ.get("TOTAL_VIDEOS", "0"))
 
 TZ = tz.gettz(os.environ["CHANNEL_TIMEZONE"])
 
-START_DATE = datetime(2026, 2, 10, 8, 0, tzinfo=TZ)
+# We set a default start date to "Tomorrow at 8:00 AM" if no state is found
+DEFAULT_START_DATE = datetime.now(TZ) + timedelta(days=1)
+DEFAULT_START_DATE = DEFAULT_START_DATE.replace(hour=8, minute=0, second=0, microsecond=0)
+
 TIME_SLOTS = [8, 12, 16]
 MAX_PER_DAY = 3
 
 WATERMARK = "@ArtWeaver"
+# This path is standard for the 'fonts-dejavu' package in Debian/Ubuntu
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 BASE_DESCRIPTION = """Disclaimer: - Copyright Disclaimer under section 107 of the Copyright Act 1976. allowance is made for "fair use" for purposes such as criticism. Comment. News. reporting. Teaching. Scholarship . and research. Fair use is a use permitted by copy status that might otherwise be infringing Non-profit. Educational or per Sonal use tips the balance in favor
@@ -71,8 +75,7 @@ pedrinwq, mini since sensi do White ff, Just Perfect config best, samsung a01 fr
 ArtCraft,
 como fazer, hud 3 dedos,hud 4 dedos, hud 5 dedos, hud 1 dedo, #hudidea 6 dedos, bad ff, ruok, Dini ff, pack de textura, textura, fzn fps, melhor sensibilidade, sundex ff, redmi note 8, xiaomi, rog phone, Charlesz, 100tiro, Gabriel clips, x1 do buxexa, free fire highlights, white ff, pewdepie, Noel ff, vídeos do fazin, como fazer gel 1p #ideasearth
 como fazer gelo 1p, gelo de um péo
-#mrindianhackers #lyunaff #bkffofficial1 #equipou #manifestedit #khatushyambhajan #bullymaguire
-"""
+#mrindianhackers #lyunaff #bkffofficial1 #equipou #manifestedit #khatushyambhajan #bullymaguire"""
 
 TAG_POOL = [
     "ArtCraft", "Art", "Craft", "DIY", "Drawing", "Painting", "Sketching",
@@ -102,20 +105,26 @@ TAG_POOL = [
     "Restoration", "Studio tour", "Desk setup", "Artist life"
 ]
 
+# Global flag to check if scheduler is running
+SCHEDULER_RUNNING = False
+
 # =========================================================
-# TELEGRAM
+# TELEGRAM HELPERS
 # =========================================================
 
 def tg(msg):
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={
-            "chat_id": TELEGRAM_CHAT,
-            "text": msg,
-            "parse_mode": "HTML"
-        },
-        timeout=10
-    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={
+                "chat_id": TELEGRAM_CHAT,
+                "text": msg,
+                "parse_mode": "HTML"
+            },
+            timeout=10
+        )
+    except Exception as e:
+        print(f"Telegram Error: {e}")
 
 def progress_bar(done, total, size=20):
     if total <= 0:
@@ -148,6 +157,8 @@ youtube = build(
 # =========================================================
 
 def clean_tmp():
+    if not os.path.exists("/tmp"):
+        os.makedirs("/tmp")
     for f in os.listdir("/tmp"):
         try:
             os.remove(os.path.join("/tmp", f))
@@ -158,19 +169,46 @@ def next_filename(n):
     return f"{n:03d}craft.mp4"
 
 def load_state():
-    buf = io.BytesIO()
-    MediaIoBaseDownload(
-        buf, drive.files().get_media(fileId=STATE_FILE_ID)
-    ).next_chunk()
-
+    """
+    Returns (last_uploaded_number, next_schedule_datetime)
+    The datetime will be the EXACT time the *next* video should go out.
+    """
     try:
-        return json.loads(buf.getvalue()).get("last_uploaded", 0)
-    except:
-        return 0
+        buf = io.BytesIO()
+        MediaIoBaseDownload(
+            buf, drive.files().get_media(fileId=STATE_FILE_ID)
+        ).next_chunk()
+        
+        data = json.loads(buf.getvalue())
+        last_n = data.get("last_uploaded", 0)
+        
+        saved_date_str = data.get("next_schedule_date")
+        if saved_date_str:
+            # Load the date and ensure it has timezone info
+            schedule_dt = datetime.fromisoformat(saved_date_str)
+            if schedule_dt.tzinfo is None:
+                schedule_dt = schedule_dt.replace(tzinfo=TZ)
+        else:
+            # Default to Tomorrow 8 AM if no file exists
+            schedule_dt = datetime.now(TZ) + timedelta(days=1)
+            schedule_dt = schedule_dt.replace(hour=TIME_SLOTS[0], minute=0, second=0, microsecond=0)
+            
+        return last_n, schedule_dt
+    except Exception as e:
+        print(f"Error loading state: {e}")
+        # Fallback default
+        d = datetime.now(TZ) + timedelta(days=1)
+        return 0, d.replace(hour=TIME_SLOTS[0], minute=0, second=0, microsecond=0)
 
-
-def save_state(n):
-    data = json.dumps({"last_uploaded": n}).encode()
+def save_state(n, next_date):
+    """
+    Saves the last uploaded number AND the next calculated schedule date
+    """
+    data = json.dumps({
+        "last_uploaded": n,
+        "next_schedule_date": next_date.isoformat()
+    }).encode()
+    
     media = MediaIoBaseUpload(
         io.BytesIO(data),
         mimetype="application/json"
@@ -179,7 +217,6 @@ def save_state(n):
         fileId=STATE_FILE_ID,
         media_body=media
     ).execute()
-
 
 def find_video(name):
     res = drive.files().list(
@@ -205,125 +242,50 @@ def download(fid, path):
             _, done = dl.next_chunk()
 
 def random_title():
-    # --- WORD BANKS ---
+    adjectives = ["Satisfying", "Oddly Satisfying", "Relaxing", "Crazy", "Impossible"]
+    actions = ["Drawing", "Painting", "Sketching", "Sculpting"]
+    mediums = ["Acrylics", "Watercolors", "Pencil", "Charcoal"]
+    subjects = ["Anime Eyes", "a Dragon", "a Landscape", "a Portrait"]
+    emojis = ["🎨", "✨", "🔥", "🖌️"]
+    hashtags = ["#shorts", "#art", "#drawing"]
     
-    # Adjectives describing the process or result
-    adjectives = [
-        "Satisfying", "Oddly Satisfying", "Relaxing", "Crazy", "Impossible", 
-        "Realistic", "3D", "Glowing", "Neon", "Tiny", "Huge", "Quick", "Easy", 
-        "Simple", "Complex", "Abstract", "Detailed", "Messy", "Clean", "Perfect"
-    ]
-
-    # The specific art action being done
-    actions = [
-        "Drawing", "Painting", "Sketching", "Sculpting", "Crafting", "Mixing", 
-        "Designing", "Coloring", "Building", "Restoring", "Doodling", "Shading",
-        "Layering", "Carving", "Pouring", "Spraying"
-    ]
-
-    # The medium or tool used
-    mediums = [
-        "Acrylics", "Watercolors", "Pencil", "Charcoal", "Resin", "Clay", 
-        "Polymer Clay", "Posca Markers", "Gouache", "Spray Paint", "Oil Pastels", 
-        "Digital Art", "Procreate", "Ink", "Tape", "Paper", "Origami", "Slime"
-    ]
-
-    # What is being created
-    subjects = [
-        "Anime Eyes", "a Dragon", "a Landscape", "a Portrait", "an Illusion", 
-        "a Logo", "a Mandala", "a Flower", "a Sunset", "a Galaxy", "a Pattern", 
-        "Textures", "a Face", "Hands", "Lips", "a 3D Hole", "Among Us", 
-        "Pokemon", "Naruto", "Demon Slayer", "Room Decor", "Stickers"
-    ]
-
-    # Engagement hooks (Shorts algorithm loves these)
-    hooks = [
-        "Wait for the end", "Don't blink", "Trust the process", "You won't believe this", 
-        "Can I draw this?", "Turning trash into art", "ASMR Art", "My best work yet", 
-        "I tried a hack", "Art Challenge", "Do not try this at home", "Satisfying peel", 
-        "Mixing random colors", "Guess the drawing", "Rate this 1-10"
-    ]
-
-    # Emojis to make it pop
-    emojis = [
-        "🎨", "✨", "🔥", "🖌️", "🖍️", "😱", "🤩", "🧵", "🧶", "✏️", "🌈", 
-        "🦋", "👀", "🖼️", "🤯", "🥶", "🟢", "💜", "🦄", "🌊"
-    ]
-    
-    # Niche hashtags
-    hashtags = ["#shorts", "#art", "#drawing", "#diy", "#satisfying", "#artist", "#painting", "#crafts"]
-
-    # --- TEMPLATES ---
-    # We randomize which sentence structure gets used to keep it fresh
-    
-    template_choice = random.randint(1, 7)
-    
-    if template_choice == 1:
-        # Standard: "Satisfying Acrylic Painting 🎨 #shorts"
-        return f"{random.choice(adjectives)} {random.choice(mediums)} {random.choice(actions)} {random.choice(emojis)} {random.choice(hashtags)}"
-        
-    elif template_choice == 2:
-        # How-to: "How to Draw Anime Eyes (Easy) ✏️"
-        return f"How to {random.choice(actions).lower()} {random.choice(subjects)} ({random.choice(adjectives)}) {random.choice(emojis)}"
-        
-    elif template_choice == 3:
-        # Hook based: "Wait for the end... 😱 #art"
-        return f"{random.choice(hooks)}... {random.choice(emojis)} {random.choice(hashtags)}"
-        
-    elif template_choice == 4:
-        # Medium focus: "Drawing a Dragon with Posca Markers 🔥"
-        return f"{random.choice(actions)} {random.choice(subjects)} with {random.choice(mediums)} {random.choice(emojis)}"
-        
-    elif template_choice == 5:
-        # Hack/Challenge: "I tried this Crazy Art Hack! ✨"
-        return f"I tried this {random.choice(adjectives)} Art Hack! {random.choice(emojis)}"
-        
-    elif template_choice == 6:
-        # Progression Series: "Day 45 of Drawing every day 🖌️"
-        # Randomizes the day number to make it look like a series
-        day = random.randint(1, 365)
-        return f"Day {day} of {random.choice(actions)} every day {random.choice(emojis)} {random.choice(hashtags)}"
-    
-    elif template_choice == 7:
-        # ASMR Style: "ASMR: Mixing Clay (Satisfying) 🎧"
-        return f"ASMR: {random.choice(actions)} {random.choice(mediums)} ({random.choice(adjectives)}) {random.choice(emojis)}"
-
-
+    return f"{random.choice(adjectives)} {random.choice(mediums)} {random.choice(actions)} {random.choice(emojis)} {random.choice(hashtags)}"
 
 # =========================================================
-# CORE SCHEDULER
+# CORE SCHEDULER (THREADED & SMART)
 # =========================================================
 
-PAUSED = False
-last_uploaded = load_state()
-audios = list_audios()
-
-def run_scheduler():
+def scheduler_thread():
+    global SCHEDULER_RUNNING
     clean_tmp()
 
+    # 1. Load exactly where we left off
+    last_uploaded, next_publish_time = load_state()
     audios = list_audios()
-    last_uploaded = load_state()
+    
+    # Safety: If the loaded time is in the past, bump it to the future
+    # (keeps the same time slot, just moves to tomorrow)
+    if next_publish_time < datetime.now(TZ):
+        print("⚠️ Saved time was in the past. Moving to tomorrow.")
+        next_publish_time += timedelta(days=1)
 
-    schedule_day = START_DATE
-    uploaded_today = 0
+    tg(f"▶️ <b>Scheduler started</b>\nNext: #{last_uploaded + 1}\nAt: {next_publish_time.strftime('%d %b %H:%M')}")
 
-    tg("▶️ <b>/schedule started</b>")
-
-    while True:
+    while SCHEDULER_RUNNING:
+        # --- PREPARE ---
         next_num = last_uploaded + 1
         fname = next_filename(next_num)
         file = find_video(fname)
 
         if not file:
             tg("🏁 <b>No more videos found</b>")
+            SCHEDULER_RUNNING = False
             return
 
-        if uploaded_today >= MAX_PER_DAY:
-            schedule_day += timedelta(days=1)
-            uploaded_today = 0
-
-        publish_at = schedule_day.replace(hour=TIME_SLOTS[uploaded_today])
-
+        # --- UPLOAD ---
+        # Use the exact time loaded from state (or calculated from previous loop)
+        publish_at = next_publish_time
+        
         title = random_title()
         tags = random.sample(TAG_POOL, min(10, len(TAG_POOL)))
         description = f"{title}\n\n{BASE_DESCRIPTION}\n\n{', '.join(tags)}"
@@ -333,20 +295,20 @@ def run_scheduler():
         aud_p = f"/tmp/{aud['name']}"
         out = f"/tmp/out_{fname}"
 
-        download(file["id"], vid)
-        download(aud["id"], aud_p)
-
-        subprocess.run([
-            "ffmpeg","-y",
-            "-i",vid,"-i",aud_p,
-            "-filter_complex",
-            f"[1:a]volume=0.45[bg];"
-            f"[0:v]drawtext=fontfile={FONT_PATH}:"
-            f"text='{WATERMARK}':x=10:y=10:fontsize=24:fontcolor=white@0.4[v]",
-            "-map","[v]","-map","[bg]","-shortest",out
-        ], check=True)
-
         try:
+            download(file["id"], vid)
+            download(aud["id"], aud_p)
+
+            subprocess.run([
+                "ffmpeg","-y",
+                "-i",vid,"-i",aud_p,
+                "-filter_complex",
+                f"[1:a]volume=0.45[bg];"
+                f"[0:v]drawtext=fontfile={FONT_PATH}:"
+                f"text='{WATERMARK}':x=10:y=10:fontsize=24:fontcolor=white@0.4[v]",
+                "-map","[v]","-map","[bg]","-shortest",out
+            ], check=True)
+
             youtube.videos().insert(
                 part="snippet,status",
                 body={
@@ -363,47 +325,73 @@ def run_scheduler():
                 },
                 media_body=MediaFileUpload(out)
             ).execute()
-        except HttpError as e:
+
+        except Exception as e:
             clean_tmp()
-            tg(
-                f"❌ <b>Upload stopped</b>\n\n"
-                f"{fname}\n\n"
-                f"<code>{str(e)}</code>"
-            )
+            tg(f"❌ <b>Error:</b> <code>{str(e)}</code>")
+            SCHEDULER_RUNNING = False
             return
 
-        # ✅ SUCCESS → update state
-        save_state(next_num)
+        # --- CALCULATE NEXT SLOT (THE HOPPING LOGIC) ---
+        current_hour = publish_at.hour
+        
+        try:
+            # Find which slot we just used (e.g., index 0 for 8am)
+            idx = TIME_SLOTS.index(current_hour)
+            
+            if idx < len(TIME_SLOTS) - 1:
+                # If there are more slots today (e.g., 8 -> 12, or 12 -> 16)
+                new_hour = TIME_SLOTS[idx + 1]
+                # Same day, new hour
+                next_publish_time = publish_at.replace(hour=new_hour, minute=0, second=0)
+            else:
+                # If we just did the last slot (16), move to tomorrow first slot (8)
+                new_hour = TIME_SLOTS[0]
+                next_publish_time = publish_at + timedelta(days=1)
+                next_publish_time = next_publish_time.replace(hour=new_hour, minute=0, second=0)
+                
+        except ValueError:
+            # Fallback if the hour isn't in TIME_SLOTS for some reason
+            next_publish_time = publish_at + timedelta(days=1)
+            next_publish_time = next_publish_time.replace(hour=TIME_SLOTS[0], minute=0, second=0)
+
+        # --- SAVE STATE ---
+        # We save the calculated time for the NEXT video immediately
+        save_state(next_num, next_publish_time)
         last_uploaded = next_num
 
         tg(
-            f"✅ <b>Uploaded</b>\n\n"
-            f"{fname}\n"
-            f"📝 {title}\n"
-            f"🕒 {publish_at.strftime('%d %b • %H:%M')}"
+            f"✅ <b>Uploaded #{next_num}</b>\n"
+            f"📅 {publish_at.strftime('%d %b • %H:%M')}\n"
+            f"⏭️ Next: {next_publish_time.strftime('%H:%M')}"
         )
 
-        os.remove(vid)
-        os.remove(aud_p)
-        os.remove(out)
+        # Cleanup
+        if os.path.exists(vid): os.remove(vid)
+        if os.path.exists(aud_p): os.remove(aud_p)
+        if os.path.exists(out): os.remove(out)
 
-        uploaded_today += 1
+        # Sleep (approx 2 mins to avoid quota rate limits)
         time.sleep(random.randint(60,120))
 
 # =========================================================
 # TELEGRAM COMMAND LOOP
 # =========================================================
 
-tg("🤖 <b>Bot online</b>\n/send /help")
+tg("🤖 <b>Bot online</b>\n/schedule /status /help")
 
 offset = 0
 
 while True:
-    r = requests.get(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
-        params={"offset": offset + 1},
-        timeout=30
-    ).json()
+    try:
+        r = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+            params={"offset": offset + 1},
+            timeout=30
+        ).json()
+    except Exception:
+        time.sleep(5)
+        continue
 
     for u in r.get("result", []):
         offset = u["update_id"]
@@ -415,29 +403,45 @@ while True:
 
         if text == "/help":
             tg(
-                "<b>Commands</b>\n\n"
-                "/schedule – start scheduling\n"
-                "/status – progress\n"
-                "/reset_tmp – clear temp\n"
-                "/help – this message"
+                "<b>Commands</b>\n"
+                "/schedule – Start background upload\n"
+                "/stop – Stop uploading\n"
+                "/status – Check progress\n"
+                "/reset_tmp – Clear temp files"
             )
 
         elif text == "/status":
-            bar = progress_bar(last_uploaded, TOTAL_VIDEOS)
+            # Load state to see current progress
+            last_up, next_dt = load_state()
+            bar = progress_bar(last_up, TOTAL_VIDEOS)
+            status_text = "🟢 Running" if SCHEDULER_RUNNING else "🔴 Stopped"
+            
             tg(
-                f"📊 <b>Status</b>\n\n"
+                f"📊 <b>Status: {status_text}</b>\n\n"
                 f"{bar}\n"
-                f"{last_uploaded} / {TOTAL_VIDEOS}\n"
-                f"Paused: {PAUSED}"
+                f"Videos: {last_up} / {TOTAL_VIDEOS}\n"
+                f"Next Sched: {next_dt.strftime('%d %b %H:%M')}"
             )
-
-
 
         elif text == "/reset_tmp":
             clean_tmp()
             tg("🧹 <b>/tmp cleaned</b>")
 
         elif text == "/schedule":
-            run_scheduler()
+            if SCHEDULER_RUNNING:
+                tg("⚠️ <b>Scheduler is already running!</b>")
+            else:
+                SCHEDULER_RUNNING = True
+                # Start the thread
+                t = threading.Thread(target=scheduler_thread)
+                t.daemon = True  # Thread dies if main program dies
+                t.start()
+
+        elif text == "/stop":
+            if SCHEDULER_RUNNING:
+                SCHEDULER_RUNNING = False
+                tg("🛑 <b>Stopping after current upload...</b>")
+            else:
+                tg("It is already stopped.")
 
     time.sleep(2)
