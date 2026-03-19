@@ -304,7 +304,9 @@ def scheduler_thread():
                 "-i",vid,"-i",aud_p,
                 "-filter_complex",
                 f"[1:a]volume=0.45[bg];"
-                f"[0:v]drawtext=fontfile={FONT_PATH}:"
+                f"[0:v]eq=contrast=1.08:saturation=1.12:brightness=0.03,"
+                f"colorbalance=rs=0.02:gs=0.01:bs=-0.02,"
+                f"drawtext=fontfile={FONT_PATH}:"
                 f"text='{WATERMARK}':x=10:y=10:fontsize=24:fontcolor=white@0.4[v]",
                 "-map","[v]","-map","[bg]","-shortest",out
             ], check=True)
