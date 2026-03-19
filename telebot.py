@@ -105,6 +105,21 @@ TAG_POOL = [
     "Restoration", "Studio tour", "Desk setup", "Artist life"
 ]
 
+############################################
+
+OVERLAY_TEXTS = [
+    "Wait for it… 👀",
+    "Watch till end 🔥",
+    "Best part coming ✨",
+    "So satisfying 😮",
+    "You won’t expect this 😳",
+    "Ending is crazy 🤯",
+    "Worth watching 💯",
+    "Final result 😍"
+]
+
+############################################
+
 # Global flag to check if scheduler is running
 SCHEDULER_RUNNING = False
 
@@ -294,6 +309,16 @@ def scheduler_thread():
         aud = random.choice(audios)
         aud_p = f"/tmp/{aud['name']}"
         out = f"/tmp/out_{fname}"
+        overlay_text = random.choice(OVERLAY_TEXTS)
+
+        positions = [
+            "x=20:y=20",
+            "x=w-tw-20:y=20",
+            "x=20:y=h-th-20",
+            "x=w-tw-20:y=h-th-20"
+        ]
+
+        overlay_pos = random.choice(positions)
 
         try:
             download(file["id"], vid)
@@ -313,8 +338,16 @@ def scheduler_thread():
                 f"unsharp=5:5:0.5,"
                 f"fps=30,"
                 f"setpts=0.98*PTS,"
+
+                # 🔥 RANDOM TEXT (not center)
+                f"drawtext=fontfile={FONT_PATH}:"
+                f"text='{overlay_text}':{overlay_pos}:"
+                f"fontsize=36:fontcolor=white:borderw=2:bordercolor=black@0.5,"
+
+                # watermark (same as before)
                 f"drawtext=fontfile={FONT_PATH}:"
                 f"text='{WATERMARK}':x=10:y=10:fontsize=24:fontcolor=white@0.4[v]",
+
                 "-map","[v]","-map","[bg]","-shortest",out
             ], check=True)
 
