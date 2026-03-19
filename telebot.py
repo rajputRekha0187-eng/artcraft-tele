@@ -310,6 +310,7 @@ def scheduler_thread():
         aud_p = f"/tmp/{aud['name']}"
         out = f"/tmp/out_{fname}"
         overlay_text = random.choice(OVERLAY_TEXTS)
+        overlay_text = overlay_text.replace(":", "\\:").replace("'", "\\'")
 
         positions = [
             "x=20:y=20",
@@ -326,6 +327,7 @@ def scheduler_thread():
 
             subprocess.run([
                 "ffmpeg","-y",
+                "-preset","ultrafast",
                 "-i",vid,"-i",aud_p,
                 "-filter_complex",
                 f"[1:a]volume=0.45,atempo=1.02[bg];"
