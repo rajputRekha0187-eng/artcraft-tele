@@ -303,9 +303,16 @@ def scheduler_thread():
                 "ffmpeg","-y",
                 "-i",vid,"-i",aud_p,
                 "-filter_complex",
-                f"[1:a]volume=0.45[bg];"
-                f"[0:v]eq=contrast=1.08:saturation=1.12:brightness=0.03,"
-                f"colorbalance=rs=0.02:gs=0.01:bs=-0.02,"
+                f"[1:a]volume=0.45,atempo=1.02[bg];"
+                f"[0:v]"
+                f"scale=iw*1.06:ih*1.06,"
+                f"crop=iw:ih,"
+                f"eq=contrast=1.10:saturation=1.15:brightness=0.04,"
+                f"hue=h=5:s=1.05,"
+                f"colorbalance=rs=0.03:gs=0.01:bs=-0.03,"
+                f"unsharp=5:5:0.5,"
+                f"fps=30,"
+                f"setpts=0.98*PTS,"
                 f"drawtext=fontfile={FONT_PATH}:"
                 f"text='{WATERMARK}':x=10:y=10:fontsize=24:fontcolor=white@0.4[v]",
                 "-map","[v]","-map","[bg]","-shortest",out
