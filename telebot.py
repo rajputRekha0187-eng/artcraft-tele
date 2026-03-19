@@ -108,14 +108,14 @@ TAG_POOL = [
 ############################################
 
 OVERLAY_TEXTS = [
-    "Wait for it… 👀",
-    "Watch till end 🔥",
-    "Best part coming ✨",
-    "So satisfying 😮",
-    "You won’t expect this 😳",
-    "Ending is crazy 🤯",
-    "Worth watching 💯",
-    "Final result 😍"
+    "Wait for it",
+    "Watch till end",
+    "Best part coming",
+    "So satisfying",
+    "You wont expect this",
+    "Ending is crazy",
+    "Worth watching",
+    "Final result"
 ]
 
 ############################################
