@@ -327,7 +327,6 @@ def scheduler_thread():
 
             subprocess.run([
                 "ffmpeg","-y",
-                "-preset","ultrafast",
                 "-i",vid,"-i",aud_p,
                 "-filter_complex",
                 f"[1:a]volume=0.45,atempo=1.02[bg];"
@@ -340,17 +339,17 @@ def scheduler_thread():
                 f"unsharp=5:5:0.5,"
                 f"fps=30,"
                 f"setpts=0.98*PTS,"
-
-                # 🔥 RANDOM TEXT (not center)
+            
                 f"drawtext=fontfile={FONT_PATH}:"
                 f"text='{overlay_text}':{overlay_pos}:"
                 f"fontsize=36:fontcolor=white:borderw=2:bordercolor=black@0.5,"
 
-                # watermark (same as before)
                 f"drawtext=fontfile={FONT_PATH}:"
                 f"text='{WATERMARK}':x=10:y=10:fontsize=24:fontcolor=white@0.4[v]",
 
-                "-map","[v]","-map","[bg]","-shortest",out
+                "-map","[v]","-map","[bg]",
+                "-preset","ultrafast",   # ✅ moved here
+                "-shortest",out
             ], check=True)
 
             youtube.videos().insert(
